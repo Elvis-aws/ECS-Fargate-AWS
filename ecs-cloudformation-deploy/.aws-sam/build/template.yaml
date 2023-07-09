@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'ECS Fargate
+
+  '
+Parameters:
+  NginxRepo:
+    Type: String
+    Default: repo-app-nginx
+    Description: Nginx repository
+  FlaskRepo:
+    Type: String
+    Default: repo-app-flask
+    Description: Flask repository
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    DependsOn: TaskDefinition
+    Properties:
+      ClusterName:
+        Fn::Sub: ${AWS::StackName}-cluster
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: LogGroup
+    Properties:
+      Family: flask-family
+      Cpu: '512'
+      Memory: 2GB
+      ExecutionRoleArn:
+        Ref: FargateTaskExecutionRole
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+      - FARGATE
+      TaskRoleArn:
+        Ref: TaskRole
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+      - Name:
+          Fn::Sub: ${AWS::StackName}-nginxcontainer
+        Image: 934433842270.dkr.ecr.eu-west-2.amazonaws.com/repo-app-nginx:latest
+        PortMappings:
+        - ContainerPort: 80
+          HostPort: 80
+        Essential: true
+        DependsOn:
+        - ContainerName:
+            Fn::Sub: ${AWS::StackName}-flaskcontainer
+          Condition: START
+      - Name:
+          Fn::Sub: ${AWS::StackName}-flaskcontainer
+        Image: 934433842270.dkr.ecr.eu-west-2.amazonaws.com/repo-app-flask:latest
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group:
+              Ref: LogGroup
+            awslogs-region:
+              Ref: AWS::Region
+            awslogs-stream-prefix:
+              Fn::Sub: ${AWS::StackName}-log-stream
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: Cluster
+    Properties:
+      Cluster:
+        Ref: Cluster
+      DesiredCount: 2
+      LaunchType: FARGATE
+      LoadBalancers:
+      - ContainerName:
+          Fn::Sub: ${AWS::StackName}-nginxcontainer
+        ContainerPort: 80
+        TargetGroupArn:
+          Fn::ImportValue: ExportAlbTargetGroup
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+          - Fn::ImportValue: ExportContainerSg
+          Subnets:
+          - Fn::ImportValue: ExportPrivSubnet1
+          - Fn::ImportValue: ExportPrivSubnet2
+      ServiceName:
+        Fn::Sub: ${AWS::StackName}-service
+      TaskDefinition:
+        Ref: TaskDefinition
+  ServiceScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn:
+    - Service
+    Properties:
+      MaxCapacity: 3
+      MinCapacity: 1
+      ResourceId:
+        Fn::Select:
+        - 5
+        - Fn::Split:
+          - ':'
+          - Ref: Service
+      RoleARN:
+        Fn::GetAtt:
+        - ServiceTaskScalingRole
+        - Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+  ServiceScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn:
+    - Service
+    - ServiceScalableTarget
+    Properties:
+      PolicyName: ServiceScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId:
+        Ref: ServiceScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        DisableScaleIn: false
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 0
+        ScaleOutCooldown: 0
+        TargetValue: 0.01
+  ServiceTaskScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ecs-tasks.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Sub: ${AWS::StackName}-log-group
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ecs-tasks.amazonaws.com
+          Action:
+          - sts:AssumeRole
+  FargateTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ecs-tasks.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy

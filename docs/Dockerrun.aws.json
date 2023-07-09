@@ -1,0 +1,26 @@
+{
+  "AWSEBDockerrunVersion": 2,
+  "containerDefinitions":[
+    {
+      "name": "flask-api",
+      "image": "flaskapp:latest",
+      "hostname":"flaskapp",
+      "essential": false,
+      "memory": 128
+    },
+
+    {
+      "name": "nginx",
+      "image": "nginx:latest",
+      "hostname": "nginx",
+      "essential": true,
+      "memory": 128,
+      "portMappings": [
+        {
+          "hostPort": 80,
+          "containerPort": 80
+        }
+      ]
+    }
+  ]
+}

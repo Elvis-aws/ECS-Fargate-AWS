@@ -5,7 +5,5 @@
 
 
 # ecs-fargate-flask
-- Deploy template
-  - sam build 
-  - sam deploy 
-  - sam deploy
+- Deploy template_vpc.yaml template
+- 

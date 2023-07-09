@@ -1,0 +1,49 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'ECS EC2
+
+  '
+Resources:
+  FlaskRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName:
+        Fn::Sub: ${AWS::StackName}-flask
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      RepositoryPolicyText:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowPushPull
+          Effect: Allow
+          Principal:
+            AWS: '*'
+          Action: '*'
+  NginxRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName:
+        Fn::Sub: ${AWS::StackName}-nginx
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      RepositoryPolicyText:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowPushPull
+          Effect: Allow
+          Principal:
+            AWS: '*'
+          Action: '*'
+Outputs:
+  FlaskRepo:
+    Value:
+      Ref: FlaskRepository
+    Export:
+      Name: FlaskRepository
+  NginxRepo:
+    Value:
+      Ref: NginxRepository
+    Export:
+      Name: NginxRepository

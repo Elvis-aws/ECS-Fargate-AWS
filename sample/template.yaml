@@ -3,26 +3,27 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   ECS Fargate
 
-Parameters:
-  ProjectName:
-    Type: String
-    Default: ECS-Fargate-VPC
-
 Mappings:
   SubnetConfig:
     VPC:
       CIDR: '10.0.0.0/16'
     Private1:
-      CIDR: '10.0.0.0/24'
-    Private2:
       CIDR: '10.0.1.0/24'
-    Public1:
+    Private2:
       CIDR: '10.0.2.0/24'
-    Public2:
+    Public1:
       CIDR: '10.0.3.0/24'
-#    Public1:
-#      CIDR: '10.0.4.0/24'
+    Public2:
+      CIDR: '10.0.4.0/24'
 Resources:
+##############################################
+################## S3 Bucket #################
+##############################################
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-s3bucket
+      AccessControl: Private
 ############################################################################################
 ################################### VPC Config Start #######################################
 
@@ -38,8 +39,6 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-vpc
-        - Key: Project
-          Value: !Ref ProjectName
 ##############################################
 ############ Public Subnets #################
 ##############################################
@@ -51,53 +50,39 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-public-subnet-1
-      AvailabilityZone: !Select
-        - 0
-        - Fn::GetAZs: !Ref AWS::Region
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
 
   PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
-      AvailabilityZone: !Select
-        - 1
-        - Fn::GetAZs: !Ref AWS::Region
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
       VpcId: !Ref MyVPC
       CidrBlock: !FindInMap [ 'SubnetConfig', 'Public2', 'CIDR' ]
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-public-subnet-2
-        - Key: Project
-          Value: !Ref ProjectName
 ##############################################
 ############ Private Subnets #################
 ##############################################
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
-      AvailabilityZone: !Select
-        - 0
-        - Fn::GetAZs: !Ref AWS::Region
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
       VpcId: !Ref MyVPC
       CidrBlock: !FindInMap [ 'SubnetConfig', 'Private1', 'CIDR' ]
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-private-subnet-1
-        - Key: Project
-          Value: !Ref ProjectName
 
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
-      AvailabilityZone: !Select
-        - 1
-        - Fn::GetAZs: !Ref AWS::Region
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
       VpcId: !Ref MyVPC
       CidrBlock: !FindInMap [ 'SubnetConfig', 'Private2', 'CIDR' ]
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-private-subnet-2
-        - Key: Project
-          Value: !Ref ProjectName
 ##############################################
 ############### ECR Repository ###############
 ##############################################
@@ -105,6 +90,9 @@ Resources:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: !Sub ${AWS::StackName}-ecrrepository
+############################################################################################
+################################### ALB Config Start #######################################
+
 ##############################################
 ########## Application Load Balancer #########
 ##############################################
@@ -120,31 +108,31 @@ Resources:
         - !Ref PublicSubnet2
       Type: application
 ##############################################
-############# AlB Security Group #############
-##############################################
-  ALBSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupName: !Sub ${AWS::StackName}-alb-security-group
-      GroupDescription: Allow HTTP Only.
-      VpcId: !Ref MyVPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
-##############################################
 ################ Alb Listener ################
 ##############################################
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      DefaultActions:
-        - TargetGroupArn: !Ref ALBTargetGroup
-          Type: forward
       LoadBalancerArn: !Ref ALB
       Port: 80
       Protocol: HTTP
+      DefaultActions:
+        - TargetGroupArn: !Ref ALBTargetGroup
+          Type: forward
+#          ForwardConfig:
+#            TargetGroups:
+#              - TargetGroupArn: !Ref TargetGroup1
+#                Weight: 1
+#              - TargetGroupArn: !Ref TargetGroup2
+#                Weight: 1
+#        Conditions:
+#          - Field: path-pattern
+#            Values:
+#              - foo
+#        ListenerArn: !Ref Listener
+#        Priority: 1
+# Information for creating an action that distributes requests among one or more target groups.
+# Listens to incomming requests from the load balancer
 ##############################################
 ############## ALB Target Group ##############
 ##############################################
@@ -166,6 +154,20 @@ Resources:
         HttpCode: '200'
       TargetType: ip
 ##############################################
+############# AlB Security Group #############
+##############################################
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName}-alb-security-group
+      GroupDescription: Allow HTTP Only.
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+##############################################
 ########## CloudWatchLogs Endpoint ###########
 ##############################################
   CloudWatchLogsEndpoint:
@@ -180,6 +182,10 @@ Resources:
         - !Ref PrivateSubnet2
       VpcEndpointType: Interface
       VpcId: !Ref MyVPC
+############################################################################################
+############################## VPC Endpoint Config Start ###################################
+# In order for Fargate on a private subnet to access the ECR, three different VPC endpoints must be created.
+# Two endpoints related to the ECR and one endpoint related to S3.
 ##############################################
 ############## ECR DKR Endpoint ##############
 ##############################################
@@ -233,14 +239,6 @@ Resources:
         - !Ref PrivateRouteTable
       ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
       VpcId: !Ref MyVPC
-##############################################
-################## S3 Bucket #################
-##############################################
-  S3Bucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub ${AWS::StackName}-s3bucket
-      AccessControl: Private
 ##############################################
 ################ Route Tables ################
 ##############################################
@@ -327,31 +325,10 @@ Resources:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          SourceSecurityGroupId: !Ref ServiceSecurityGroup
+          SourceSecurityGroupId: !Ref ContainerSecurityGroup
 ############################################################################################
 ################################# Fargate Config Start #####################################
 
-##############################################
-########### Service Security Group ##########
-##############################################
-  ServiceSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupName: !Sub ${AWS::StackName}-servicesecuritygroup
-      GroupDescription: Allow HTTP from ALBSecurityGroup.
-      VpcId: !Ref MyVPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          SourceSecurityGroupId: !Ref ALBSecurityGroup
-##############################################
-################# Log Group ##################
-##############################################
-  LogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub ${AWS::StackName}-log-group
 ##############################################
 ################### Cluster ##################
 ##############################################
@@ -359,39 +336,48 @@ Resources:
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: !Sub ${AWS::StackName}-cluster
-##############################################
-######## Fargate Task Execution Role #########
-##############################################
-  FargateTaskExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - ecs-tasks.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+# An Amazon ECS cluster is a logical grouping of tasks or services. If you are running tasks or services that use the EC2
+# launch type, a cluster is also a grouping of container instances. If you are using capacity providers, a cluster is
+# also a logical grouping of capacity providers. A Cluster can be a combination of Fargate and EC2 launch types.
+# When you first use Amazon ECS, a default cluster is created for you, but you can create multiple clusters in an account
+# to keep your resources separate.
 ##############################################
 ############## Task Definition ###############
 ##############################################
-  TaskDefinition:
+  TaskDefinition1:
     Type: AWS::ECS::TaskDefinition
+    DependsOn: LogGroup
     Properties:
       Cpu: '512'
-      Memory: '1024'
+      Memory: 2GB
       ExecutionRoleArn: !Ref FargateTaskExecutionRole
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
       TaskRoleArn: !Ref TaskRole
       ContainerDefinitions:
-        - Name: !Sub ${AWS::StackName}-container
-          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${MyRepository}:latest
+        - Name: !Sub ${AWS::StackName}-nginxcontainer
+          Image: nginx:latest
+
+  TaskDefinition2:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: LogGroup
+    Properties:
+      Cpu: '512'
+      Memory: 2GB
+      # "The ARN of the task execution role that containers in this task can assume. All containers in this task are
+      # granted the permissions that are specified in this role."
+      ExecutionRoleArn: !Ref FargateTaskExecutionRole
+      # awsvpc is required for Fargate
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      # "The Amazon Resource Name (ARN) of an AWS Identity and Access Management (IAM) role that grants containers in
+      # the task permission to call AWS APIs on your behalf."
+      TaskRoleArn: !Ref TaskRole
+      ContainerDefinitions:
+        - Name: !Sub ${AWS::StackName}-flaskcontainer
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:latest
           PortMappings:
             - ContainerPort: 80
               HostPort: 80
@@ -401,14 +387,31 @@ Resources:
               awslogs-group: !Ref LogGroup
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: !Sub ${AWS::StackName}-log-stream
+# To prepare your application to run on Amazon ECS, you create a task definition. The task definition is a text file, in
+# JSON format, that describes one or more containers, up to a maximum of ten, that form your application.
 ##############################################
-################## Task Role #################
+########### Container Security Group ##########
+##############################################
+  ContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName}-containersecuritygroup
+      GroupDescription: Allow HTTP from ALBSecurityGroup. Security group for containers
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+##############################################
+################## Service ###################
 ##############################################
   Service:
     Type: AWS::ECS::Service
+    DependsOn: ALBListener
     Properties:
       Cluster: !Ref Cluster
-      DesiredCount: 1
+      DesiredCount: 2
       LaunchType: FARGATE
       LoadBalancers:
         - ContainerName: !Sub ${AWS::StackName}-container
@@ -416,30 +419,30 @@ Resources:
           TargetGroupArn: !Ref ALBTargetGroup
       NetworkConfiguration:
         AwsvpcConfiguration:
+          # change to ENABLED if you're not using private subnets that have access to a NAT gateway
+          AssignPublicIp: DISABLED
           SecurityGroups:
-            - !Ref ServiceSecurityGroup
+            - !Ref ContainerSecurityGroup
           Subnets:
             - !Ref PrivateSubnet1
             - !Ref PrivateSubnet2
       ServiceName: !Sub ${AWS::StackName}-service
       TaskDefinition: !Ref TaskDefinition
+# Amazon ECS allows you to run and maintain a specified number of instances of a task definition simultaneously in an
+# Amazon ECS cluster. This is called a service. If any of your tasks should fail or stop for any reason, the Amazon ECS
+# service scheduler launches another instance of your task definition to replace it and maintain the desired count of
+# tasks in the service depending on the scheduling strategy used.
+# There are two service scheduler strategies available:
+    # REPLICA: The replica scheduling strategy places and maintains the desired number of tasks across your cluster.
+              # By default, the service scheduler spreads tasks across Availability Zones. You can use task placement
+              # strategies and constraints to customize task placement decisions.
+    # DAEMON: The daemon scheduling strategy deploys exactly one task on each active container instance that meets all
+              # of the task placement constraints that you specify in your cluster. The service scheduler evaluates the
+              # task placement constraints for running tasks and will stop tasks that do not meet the placement
+              # constraints. When using this strategy, there is no need to specify a desired number of tasks, a task
+              # placement strategy, or use Service Auto Scaling policies.
 ##############################################
-################## Task Role #################
-##############################################
-  TaskRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - ecs-tasks.amazonaws.com
-            Action:
-              - sts:AssumeRole
-##############################################
-########### Service Scalab leTarget ##########
+########### Service Scalable Target ##########
 ##############################################
   ServiceScalableTarget:
     Type: AWS::ApplicationAutoScaling::ScalableTarget
@@ -485,6 +488,44 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
-
+##############################################
+################# Log Group ##################
+##############################################
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub ${AWS::StackName}-log-group
+##############################################
+################## Task Role #################
+##############################################
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+##############################################
+######## Fargate Task Execution Role #########
+##############################################
+  FargateTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 ################## Out Put ###################
 ##############################################

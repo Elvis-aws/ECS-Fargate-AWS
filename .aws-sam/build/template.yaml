@@ -1,25 +1,27 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: 'ECS Fargate
+Description: 'ECS/VPC Repository
 
   '
-Parameters:
-  ProjectName:
-    Type: String
-    Default: ECS-Fargate-VPC
 Mappings:
   SubnetConfig:
     VPC:
       CIDR: 10.0.0.0/16
     Private1:
-      CIDR: 10.0.0.0/24
-    Private2:
       CIDR: 10.0.1.0/24
-    Public1:
+    Private2:
       CIDR: 10.0.2.0/24
-    Public2:
+    Public1:
       CIDR: 10.0.3.0/24
+    Public2:
+      CIDR: 10.0.4.0/24
 Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-s3bucket
+      AccessControl: Private
   MyVPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -34,9 +36,6 @@ Resources:
       - Key: Name
         Value:
           Fn::Sub: ${AWS::StackName}-vpc
-      - Key: Project
-        Value:
-          Ref: ProjectName
   PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -54,16 +53,14 @@ Resources:
       AvailabilityZone:
         Fn::Select:
         - 0
-        - Fn::GetAZs:
-            Ref: AWS::Region
+        - Fn::GetAZs: ''
   PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone:
         Fn::Select:
         - 1
-        - Fn::GetAZs:
-            Ref: AWS::Region
+        - Fn::GetAZs: ''
       VpcId:
         Ref: MyVPC
       CidrBlock:
@@ -75,17 +72,13 @@ Resources:
       - Key: Name
         Value:
           Fn::Sub: ${AWS::StackName}-public-subnet-2
-      - Key: Project
-        Value:
-          Ref: ProjectName
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone:
         Fn::Select:
         - 0
-        - Fn::GetAZs:
-            Ref: AWS::Region
+        - Fn::GetAZs: ''
       VpcId:
         Ref: MyVPC
       CidrBlock:
@@ -97,17 +90,13 @@ Resources:
       - Key: Name
         Value:
           Fn::Sub: ${AWS::StackName}-private-subnet-1
-      - Key: Project
-        Value:
-          Ref: ProjectName
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone:
         Fn::Select:
         - 1
-        - Fn::GetAZs:
-            Ref: AWS::Region
+        - Fn::GetAZs: ''
       VpcId:
         Ref: MyVPC
       CidrBlock:
@@ -119,14 +108,6 @@ Resources:
       - Key: Name
         Value:
           Fn::Sub: ${AWS::StackName}-private-subnet-2
-      - Key: Project
-        Value:
-          Ref: ProjectName
-  ECRRepository:
-    Type: AWS::ECR::Repository
-    Properties:
-      RepositoryName:
-        Fn::Sub: ${AWS::StackName}-ecrrepository
   ALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -139,32 +120,17 @@ Resources:
       - Ref: PublicSubnet1
       - Ref: PublicSubnet2
       Type: application
-  ALBSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: ALB Security Group
-      SecurityGroupIngress:
-      - IpProtocol: tcp
-        FromPort: 80
-        ToPort: 80
-        CidrIp: '0.0.0.0/0'
-      - IpProtocol: tcp
-        FromPort: 443
-        ToPort: 443
-        CidrIp: '0.0.0.0/0'
-      VpcId:
-        Ref: MyVPC
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      DefaultActions:
-      - TargetGroupArn:
-          Ref: ALBTargetGroup
-        Type: forward
       LoadBalancerArn:
         Ref: ALB
       Port: 80
       Protocol: HTTP
+      DefaultActions:
+      - TargetGroupArn:
+          Ref: ALBTargetGroup
+        Type: forward
   ALBTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -177,13 +143,26 @@ Resources:
       HealthCheckProtocol: HTTP
       HealthCheckPath: /
       HealthCheckPort: traffic-port
-      HealthyThresholdCount: 3
-      UnhealthyThresholdCount: 3
-      HealthCheckTimeoutSeconds: 3
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      HealthCheckTimeoutSeconds: 5
       HealthCheckIntervalSeconds: 30
       Matcher:
         HttpCode: '200'
       TargetType: ip
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName:
+        Fn::Sub: ${AWS::StackName}-alb-security-group
+      GroupDescription: Allow HTTP Only.
+      VpcId:
+        Ref: MyVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: '0.0.0.0/0'
   CloudWatchLogsEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -228,20 +207,6 @@ Resources:
       VpcEndpointType: Interface
       VpcId:
         Ref: MyVPC
-  EndpointSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Allow HTTPS traffic from the VPC
-      VpcId:
-        Ref: MyVPC
-      SecurityGroupIngress:
-      - IpProtocol: tcp
-        FromPort: 443
-        ToPort: 443
-        CidrIp:
-          Fn::GetAtt:
-          - MyVPC
-          - CidrBlock
   S3Endpoint:
     Type: AWS::EC2::VPCEndpoint
     DependsOn: MyVPC
@@ -264,25 +229,29 @@ Resources:
         Fn::Sub: com.amazonaws.${AWS::Region}.s3
       VpcId:
         Ref: MyVPC
-  S3Bucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName:
-        Fn::Sub: ${AWS::StackName}-s3bucket
-      AccessControl: Private
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId:
         Ref: MyVPC
-  PrivateRoute:
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: MyVPC
+  RouteToInternet:
     Type: AWS::EC2::Route
     Properties:
       RouteTableId:
-        Ref: PrivateRouteTable
+        Ref: PublicRouteTable
       DestinationCidrBlock: '0.0.0.0/0'
-      NatGatewayId:
-        Ref: NatGateway
+      GatewayId:
+        Ref: InternetGateway
+  NatGatewayAttachment:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachement
+    Properties:
+      Domain: vpc
   NatGateway:
     Type: AWS::EC2::NatGateway
     Properties:
@@ -292,11 +261,6 @@ Resources:
         - AllocationId
       SubnetId:
         Ref: PublicSubnet1
-  NatGatewayAttachment:
-    Type: AWS::EC2::EIP
-    DependsOn: GatewayAttachement
-    Properties:
-      Domain: vpc
   GatewayAttachement:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
@@ -306,10 +270,98 @@ Resources:
         Ref: InternetGateway
   InternetGateway:
     Type: AWS::EC2::InternetGateway
-  SubnetRouteTableAssociation:
+  PrivateSubnetRouteTableAssociation1:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId:
         Ref: PrivateSubnet1
       RouteTableId:
         Ref: PrivateRouteTable
+  PrivateSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PrivateSubnet2
+      RouteTableId:
+        Ref: PrivateRouteTable
+  PublicSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PublicSubnet1
+      RouteTableId:
+        Ref: PublicRouteTable
+  PublicSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PublicSubnet2
+      RouteTableId:
+        Ref: PublicRouteTable
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTPS traffic from the VPC
+      VpcId:
+        Ref: MyVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        SourceSecurityGroupId:
+          Ref: ContainerSecurityGroup
+  ContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName:
+        Fn::Sub: ${AWS::StackName}-containersecuritygroup
+      GroupDescription: Allow HTTP from ALBSecurityGroup. Security group for containers
+      VpcId:
+        Ref: MyVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        SourceSecurityGroupId:
+          Ref: ALBSecurityGroup
+Outputs:
+  ExportBucket:
+    Value:
+      Ref: S3Bucket
+    Export:
+      Name: ExportBucket
+  ExportVpc:
+    Value:
+      Ref: MyVPC
+    Export:
+      Name: ExportVpc
+  ExportPrivSubnet1:
+    Value:
+      Ref: PrivateSubnet1
+    Export:
+      Name: ExportPrivSubnet1
+  ExportPrivSubnet2:
+    Value:
+      Ref: PrivateSubnet2
+    Export:
+      Name: ExportPrivSubnet2
+  ExportAlb:
+    Value:
+      Ref: ALB
+    Export:
+      Name: ExportAlb
+  ExportAlbListener:
+    Value:
+      Ref: ALBListener
+    Export:
+      Name: ExportAlbListener
+  ExportAlbTargetGroup:
+    Value:
+      Ref: ALBTargetGroup
+    Export:
+      Name: ExportAlbTargetGroup
+  ExportContainerSg:
+    Value:
+      Ref: ContainerSecurityGroup
+    Export:
+      Name: ExportContainerSg

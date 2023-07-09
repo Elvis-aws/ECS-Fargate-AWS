@@ -1,0 +1,397 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  ECS/VPC Repository
+
+Mappings:
+  SubnetConfig:
+    VPC:
+      CIDR: '10.0.0.0/16'
+    Private1:
+      CIDR: '10.0.1.0/24'
+    Private2:
+      CIDR: '10.0.2.0/24'
+    Public1:
+      CIDR: '10.0.3.0/24'
+    Public2:
+      CIDR: '10.0.4.0/24'
+Resources:
+##############################################
+################## S3 Bucket #################
+##############################################
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-s3bucket
+      AccessControl: Private
+############################################################################################
+################################### VPC Config Start #######################################
+
+##############################################
+###################### VPC ###################
+##############################################
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !FindInMap [ 'SubnetConfig', 'VPC', 'CIDR' ]
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-vpc
+# This s a logically isolated virtual network within the Amazon Web Services (AWS) cloud infrastructure.
+# It allows you to define and control a virtual network environment, including IP address ranges, subnets, route tables,
+# and network gateways.
+##############################################
+############ Public Subnets #################
+##############################################
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !FindInMap [ 'SubnetConfig', 'Public1', 'CIDR' ]
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-public-subnet-1
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      VpcId: !Ref MyVPC
+      CidrBlock: !FindInMap [ 'SubnetConfig', 'Public2', 'CIDR' ]
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-public-subnet-2
+##############################################
+############ Private Subnets #################
+##############################################
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      VpcId: !Ref MyVPC
+      CidrBlock: !FindInMap [ 'SubnetConfig', 'Private1', 'CIDR' ]
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-private-subnet-1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      VpcId: !Ref MyVPC
+      CidrBlock: !FindInMap [ 'SubnetConfig', 'Private2', 'CIDR' ]
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-private-subnet-2
+#  In the context of networking, a subnet is a range of IP addresses within a larger network that represents a logical
+# subdivision. Subnets allow for better organization, management, and segmentation of network resources.
+############################################################################################
+################################### ALB Config Start #######################################
+
+##############################################
+########## Application Load Balancer #########
+##############################################
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${AWS::StackName}-alb
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      Type: application
+##############################################
+################ Alb Listener ################
+##############################################
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - TargetGroupArn: !Ref ALBTargetGroup
+          Type: forward
+#          ForwardConfig:
+#            TargetGroups:
+#              - TargetGroupArn: !Ref TargetGroup1
+#                Weight: 1
+#              - TargetGroupArn: !Ref TargetGroup2
+#                Weight: 1
+#        Conditions:
+#          - Field: path-pattern
+#            Values:
+#              - foo
+#        ListenerArn: !Ref Listener
+#        Priority: 1
+# Information for creating an action that distributes requests among one or more target groups.
+# Listens to incomming requests from the load balancer
+##############################################
+############## ALB Target Group ##############
+##############################################
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref MyVPC
+      Name: !Sub ${AWS::StackName}-targetGroup
+      Protocol: HTTP
+      Port: 80
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      HealthCheckPort: traffic-port
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      HealthCheckTimeoutSeconds: 5
+      HealthCheckIntervalSeconds: 30
+      Matcher:
+        HttpCode: '200'
+      TargetType: ip
+##############################################
+############# AlB Security Group #############
+##############################################
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName}-alb-security-group
+      GroupDescription: Allow HTTP Only.
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+##############################################
+########## CloudWatchLogs Endpoint ###########
+##############################################
+  CloudWatchLogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.logs
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      VpcEndpointType: Interface
+      VpcId: !Ref MyVPC
+############################################################################################
+############################## VPC Endpoint Config Start ###################################
+# In order for Fargate on a private subnet to access the ECR, three different VPC endpoints must be created.
+# Two endpoints related to the ECR and one endpoint related to S3.
+##############################################
+############## ECR DKR Endpoint ##############
+##############################################
+  ECRDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    DependsOn: MyVPC
+    Properties:
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.dkr
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      VpcEndpointType: Interface
+      VpcId: !Ref MyVPC
+##############################################
+############## ECR API Endpoint ##############
+##############################################
+  ECRApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    DependsOn: MyVPC
+    Properties:
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ecr.api
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      VpcEndpointType: Interface
+      VpcId: !Ref MyVPC
+##############################################
+################ S3 Endpoint #################
+##############################################
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    DependsOn: MyVPC
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal: "*"
+            Action:
+              - s3:*
+            Resource:
+              - !GetAtt S3Bucket.Arn
+              - !Sub "${S3Bucket.Arn}/*"
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcId: !Ref MyVPC
+##############################################
+################ Route Tables ################
+##############################################
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+##############################################
+################ Internet Route ##############
+##############################################
+  RouteToInternet:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+# Main route table automatically comes with the VPC. It controls the routing for all subnets that are not explicitly
+# associated with any other route table. A subnet can only be associated with one route table at a time, but you can
+# associate multiple subnets with the same subnet route table. Every route table contains a local route for communication
+# within the VPC. You can associate a route table with an internet gateway or a virtual private gateway. When a route
+# table is associated with a gateway, it’s referred to as a gateway route table. You cannot set a gateway route table as
+# the main route table. Main route table contains only a local route (i.e. communication within the VPC). You cannot
+# delete the main route table.
+# Destination	Target
+# 0.0.0.0/0  	igw-id (Direct any traffic in this range to the internet gateway)
+# 0.0.0.0/16    local (Direct any traffic in this range to other subnets locally)
+##############################################
+########### Nate Gateway Attachment ##########
+##############################################
+  NatGatewayAttachment:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachement
+    Properties:
+      Domain: vpc
+# This refers to an Elastic IP address resource in the AWS CloudFormation service. An Elastic IP (EIP) address is a static,
+# public IPv4 address that you can allocate and associate with your Amazon Elastic Compute Cloud (EC2) instances, NAT
+# gateways, or other AWS resources.
+##############################################
+################ Nate Gateway ################
+##############################################
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayAttachment.AllocationId
+      SubnetId: !Ref PublicSubnet1
+# It is connected to the internet gateway. A NAT gateway is a Network Address Translation (NAT) service. You can use a
+# NAT gateway so that instances in a private subnet can connect to services outside your VPC but external services cannot
+# initiate a connection with those instances.
+##############################################
+############# Gateway Attachment #############
+##############################################
+  GatewayAttachement:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref InternetGateway
+# This resource allows you to associate a VPC with a specific type of gateway, such as an Internet Gateway (IGW) or a
+# Virtual Private Gateway (VGW).
+##############################################
+############## Internet Gateway ##############
+##############################################
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+# represents an Internet Gateway (IGW) in Amazon EC2. An Internet Gateway is a horizontally scalable, highly available
+# VPC (Virtual Private Cloud) component that allows communication between instances in your VPC and the Internet.
+##############################################
+######### Subnet Association #########
+##############################################
+  PrivateSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+  PublicSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+# This allows you to associate a specific subnet with a particular route table within a VPC (Virtual Private Cloud).
+##############################################
+########### Endpoint Security Group ##########
+##############################################
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Allow HTTPS traffic from the VPC'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ContainerSecurityGroup
+##############################################
+########### Container Security Group ##########
+##############################################
+  ContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName}-containersecuritygroup
+      GroupDescription: Allow HTTP from ALBSecurityGroup. Security group for containers
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+################## Out Put ###################
+##############################################
+Outputs:
+  ExportBucket:
+    Value: !Ref S3Bucket
+    Export:
+      Name: ExportBucket
+  ExportVpc:
+    Value: !Ref MyVPC
+    Export:
+      Name: ExportVpc
+  ExportPrivSubnet1:
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: ExportPrivSubnet1
+  ExportPrivSubnet2:
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: ExportPrivSubnet2
+  ExportAlb:
+    Value: !Ref ALB
+    Export:
+      Name: ExportAlb
+  ExportAlbListener:
+    Value: !Ref ALBListener
+    Export:
+      Name: ExportAlbListener
+  ExportAlbTargetGroup:
+    Value: !Ref ALBTargetGroup
+    Export:
+      Name: ExportAlbTargetGroup
+  ExportContainerSg:
+    Value: !Ref ContainerSecurityGroup
+    Export:
+      Name: ExportContainerSg

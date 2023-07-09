@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  ECS EC2
+
+
+Resources:
+
+##############################################
+############## EC2 Security Group ############
+##############################################
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: basic Security group
+      GroupDescription: Allows SSH and HTTP inbound traffic
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+##############################################
+################ EC2 Instance ################
+##############################################
+  EC2Instance:
+    DependsOn: InstanceProfile
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0eb260c4d5475b901
+      InstanceType: t2.micro
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      KeyName: ecs-ec2-deploy-key
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      # Block device mapping Or Root device volume
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 50
+        - DeviceName: /dev/sdm
+          Ebs:
+            VolumeSize: 100
+        # ephemeral drives Or Instance Store: the volatile temporary storage attached to your instances which is only
+        # present during the running lifetime of the instance.
+        - DeviceName: /dev/sdc
+          VirtualName: ephemeral0
+        - DeviceName: /dev/sdc
+          VirtualName: ephemeral1
+      Tags:
+        - Key: Name
+          Value: Fargate Instance
+      UserData: !Base64
+        'Fn::Sub': |
+          #!/bin/bash -xe
+          apt-get update
+          apt-get install apt-utils
+          apt-get install docker-compose -y
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          apt install unzip
+          unzip awscliv2.zip
+          ./aws/install
+          apt install gnupg2 pass -y
+
+##############################################
+########### EC2 Instance Profile #############
+##############################################
+  InstanceProfile:
+    DependsOn: InstanceRole
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref InstanceRole
+##############################################
+################ EC2 Role ################
+##############################################
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - ecs-ec2-deploy.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonVPCFullAccess
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess
+        - arn:aws:iam::aws:policy/AmazonECS_FullAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+        - arn:aws:iam::aws:policy/ElasticLoadBalancingFullAccess
+############################################################################################
+######################################## Out Put ###########################################
+Outputs:
+  InstanceIP:
+    Value: !GetAtt EC2Instance.PublicIp
+    Description: Instance public IP
+

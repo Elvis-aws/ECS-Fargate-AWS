@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  ECS Fargate
+
+Parameters:
+  NginxRepo:
+    Type: String
+    Default: repo-app-nginx
+    Description: Nginx repository
+  FlaskRepo:
+    Type: String
+    Default: repo-app-flask
+    Description: Flask repository
+
+Resources:
+############################################################################################
+################################# Fargate Config Start #####################################
+
+##############################################
+################### Cluster ##################
+##############################################
+  Cluster:
+    Type: AWS::ECS::Cluster
+    DependsOn: TaskDefinition
+    Properties:
+      ClusterName: !Sub ${AWS::StackName}-cluster
+# An Amazon ECS cluster is a logical grouping of tasks or services. If you are running tasks or services that use the EC2
+# launch type, a cluster is also a grouping of container instances. If you are using capacity providers, a cluster is
+# also a logical grouping of capacity providers. A Cluster can be a combination of Fargate and EC2 launch types.
+# When you first use Amazon ECS, a default cluster is created for you, but you can create multiple clusters in an account
+# to keep your resources separate.
+##############################################
+############## Task Definition ###############
+##############################################
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: LogGroup
+    Properties:
+      Family: flask-family
+      Cpu: '512'
+      Memory: 2GB
+      # "The ARN of the task execution role that containers in this task can assume. All containers in this task are
+      # granted the permissions that are specified in this role."
+      ExecutionRoleArn: !Ref FargateTaskExecutionRole
+      # awsvpc is required for Fargate
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      # "The Amazon Resource Name (ARN) of an AWS Identity and Access Management (IAM) role that grants containers in
+      # the task permission to call AWS APIs on your behalf."
+      TaskRoleArn: !Ref TaskRole
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: !Sub ${AWS::StackName}-nginxcontainer
+          Image: 934433842270.dkr.ecr.eu-west-2.amazonaws.com/repo-app-nginx:latest
+          PortMappings:
+            - ContainerPort: 80
+              HostPort: 80
+          Essential: true
+          DependsOn: # Flask container should start before nginx can boot up
+            - ContainerName: !Sub ${AWS::StackName}-flaskcontainer
+              Condition: START
+        - Name: !Sub ${AWS::StackName}-flaskcontainer
+          Image: 934433842270.dkr.ecr.eu-west-2.amazonaws.com/repo-app-flask:latest
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Sub ${AWS::StackName}-log-stream
+
+# To prepare your application to run on Amazon ECS, you create a task definition. The task definition is a text file, in
+# JSON format, that describes one or more containers, up to a maximum of ten, that form your application.
+##############################################
+################## Service ###################
+##############################################
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: Cluster
+    Properties:
+      Cluster: !Ref Cluster
+      DesiredCount: 2
+      LaunchType: FARGATE
+      LoadBalancers:
+        - ContainerName: !Sub ${AWS::StackName}-nginxcontainer # Container in Task Definition that receives request
+          ContainerPort: 80
+          TargetGroupArn: !ImportValue ExportAlbTargetGroup
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          # change to ENABLED if you're not using private subnets that have access to a NAT gateway
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !ImportValue ExportContainerSg
+          Subnets:
+            - !ImportValue ExportPrivSubnet1
+            - !ImportValue ExportPrivSubnet2
+      ServiceName: !Sub ${AWS::StackName}-service
+      TaskDefinition: !Ref TaskDefinition
+# Amazon ECS allows you to run and maintain a specified number of instances of a task definition simultaneously in an
+# Amazon ECS cluster. This is called a service. If any of your tasks should fail or stop for any reason, the Amazon ECS
+# service scheduler launches another instance of your task definition to replace it and maintain the desired count of
+# tasks in the service depending on the scheduling strategy used.
+# There are two service scheduler strategies available:
+    # REPLICA: The replica scheduling strategy places and maintains the desired number of tasks across your cluster.
+              # By default, the service scheduler spreads tasks across Availability Zones. You can use task placement
+              # strategies and constraints to customize task placement decisions.
+    # DAEMON: The daemon scheduling strategy deploys exactly one task on each active container instance that meets all
+              # of the task placement constraints that you specify in your cluster. The service scheduler evaluates the
+              # task placement constraints for running tasks and will stop tasks that do not meet the placement
+              # constraints. When using this strategy, there is no need to specify a desired number of tasks, a task
+              # placement strategy, or use Service Auto Scaling policies.
+##############################################
+########### Service Scalable Target ##########
+##############################################
+  ServiceScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn:
+      - Service
+    Properties:
+      MaxCapacity: 3
+      MinCapacity: 1
+      ResourceId: !Select [ 5, !Split [ ":", !Ref Service ] ]
+      RoleARN: !GetAtt ServiceTaskScalingRole.Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+##############################################
+########### Service Scaling Policy ###########
+##############################################
+  ServiceScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn:
+      - Service
+      - ServiceScalableTarget
+    Properties:
+      PolicyName: ServiceScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ServiceScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        DisableScaleIn: false
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 0
+        ScaleOutCooldown: 0
+        TargetValue: 0.01
+##############################################
+########## Service Task Scaling Role #########
+##############################################
+  ServiceTaskScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
+##############################################
+################# Log Group ##################
+##############################################
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub ${AWS::StackName}-log-group
+##############################################
+################## Task Role #################
+##############################################
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+##############################################
+######## Fargate Task Execution Role #########
+##############################################
+  FargateTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+################## Out Put ###################
+##############################################
