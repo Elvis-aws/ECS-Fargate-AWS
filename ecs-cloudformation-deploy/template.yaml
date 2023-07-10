@@ -3,15 +3,6 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   ECS Fargate
 
-Parameters:
-  NginxRepo:
-    Type: String
-    Default: repo-app-nginx
-    Description: Nginx repository
-  FlaskRepo:
-    Type: String
-    Default: repo-app-flask
-    Description: Flask repository
 
 Resources:
 ############################################################################################
@@ -55,7 +46,7 @@ Resources:
         OperatingSystemFamily: LINUX
       ContainerDefinitions:
         - Name: !Sub ${AWS::StackName}-nginxcontainer
-          Image: 934433842270.dkr.ecr.eu-west-2.amazonaws.com/repo-app-nginx:latest
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/repo-app-nginx:latest
           PortMappings:
             - ContainerPort: 80
               HostPort: 80
@@ -64,7 +55,7 @@ Resources:
             - ContainerName: !Sub ${AWS::StackName}-flaskcontainer
               Condition: START
         - Name: !Sub ${AWS::StackName}-flaskcontainer
-          Image: 934433842270.dkr.ecr.eu-west-2.amazonaws.com/repo-app-flask:latest
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/repo-app-flask:latest
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -82,7 +73,7 @@ Resources:
     DependsOn: Cluster
     Properties:
       Cluster: !Ref Cluster
-      DesiredCount: 2
+      DesiredCount: 1
       LaunchType: FARGATE
       LoadBalancers:
         - ContainerName: !Sub ${AWS::StackName}-nginxcontainer # Container in Task Definition that receives request
@@ -99,6 +90,20 @@ Resources:
             - !ImportValue ExportPrivSubnet2
       ServiceName: !Sub ${AWS::StackName}-service
       TaskDefinition: !Ref TaskDefinition
+#      PlacementConstraints:
+#        - Type: distinctInstance # constraint ensures that tasks are spread across different instances in the cluster
+#          Expression:
+#      PlacementStrategies:
+#        - Field: CPU
+#          Type: binpack
+#      DeploymentController:
+#        Type: CODE_DEPLOY
+      # If a capacityProviderStrategy is specified, the launchType parameter must be omitted.
+#      CapacityProviderStrategy:
+#        - Base: 2 # How many tasks, at a minimum, to run on the specified capacity provider
+#          CapacityProvider: FARGATE_SPOT
+#          Weight: 70 # Designates the relative percentage of the total number of tasks launched that should use the specified capacity provider
+
 # Amazon ECS allows you to run and maintain a specified number of instances of a task definition simultaneously in an
 # Amazon ECS cluster. This is called a service. If any of your tasks should fail or stop for any reason, the Amazon ECS
 # service scheduler launches another instance of your task definition to replace it and maintain the desired count of
@@ -165,7 +170,7 @@ Resources:
   LogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub ${AWS::StackName}-log-group
+      LogGroupName: !Sub ${AWS::StackName}-my-logs
 ##############################################
 ################## Task Role #################
 ##############################################

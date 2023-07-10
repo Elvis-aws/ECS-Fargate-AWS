@@ -105,7 +105,7 @@ Resources:
         - !Ref PublicSubnet1
         - !Ref PublicSubnet2
       Type: application
-##############################################
+  ##############################################
 ################ Alb Listener ################
 ##############################################
   ALBListener:
@@ -345,6 +345,7 @@ Resources:
           FromPort: 443
           ToPort: 443
           SourceSecurityGroupId: !Ref ContainerSecurityGroup
+
 ##############################################
 ########### Container Security Group ##########
 ##############################################

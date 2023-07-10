@@ -3,15 +3,6 @@ Transform: AWS::Serverless-2016-10-31
 Description: 'ECS Fargate
 
   '
-Parameters:
-  NginxRepo:
-    Type: String
-    Default: repo-app-nginx
-    Description: Nginx repository
-  FlaskRepo:
-    Type: String
-    Default: repo-app-flask
-    Description: Flask repository
 Resources:
   Cluster:
     Type: AWS::ECS::Cluster
@@ -39,7 +30,8 @@ Resources:
       ContainerDefinitions:
       - Name:
           Fn::Sub: ${AWS::StackName}-nginxcontainer
-        Image: 934433842270.dkr.ecr.eu-west-2.amazonaws.com/repo-app-nginx:latest
+        Image:
+          Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/repo-app-nginx:latest
         PortMappings:
         - ContainerPort: 80
           HostPort: 80
@@ -50,7 +42,8 @@ Resources:
           Condition: START
       - Name:
           Fn::Sub: ${AWS::StackName}-flaskcontainer
-        Image: 934433842270.dkr.ecr.eu-west-2.amazonaws.com/repo-app-flask:latest
+        Image:
+          Fn::Sub: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/repo-app-flask:latest
         LogConfiguration:
           LogDriver: awslogs
           Options:
@@ -66,7 +59,7 @@ Resources:
     Properties:
       Cluster:
         Ref: Cluster
-      DesiredCount: 2
+      DesiredCount: 1
       LaunchType: FARGATE
       LoadBalancers:
       - ContainerName:
@@ -137,7 +130,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName:
-        Fn::Sub: ${AWS::StackName}-log-group
+        Fn::Sub: ${AWS::StackName}-my-logs
   TaskRole:
     Type: AWS::IAM::Role
     Properties:

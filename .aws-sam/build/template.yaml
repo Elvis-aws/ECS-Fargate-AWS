@@ -310,6 +310,11 @@ Resources:
         ToPort: 443
         SourceSecurityGroupId:
           Ref: ContainerSecurityGroup
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        SourceSecurityGroupId:
+          Ref: ContainerSecurityGroup
   ContainerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -322,6 +327,11 @@ Resources:
       - IpProtocol: tcp
         FromPort: 80
         ToPort: 80
+        SourceSecurityGroupId:
+          Ref: ALBSecurityGroup
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
         SourceSecurityGroupId:
           Ref: ALBSecurityGroup
 Outputs:
